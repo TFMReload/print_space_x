@@ -18,49 +18,35 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class RocketImagesNotifier extends Notifier<List<String>> {
-  @override
-  List<String> build() => [];
-
-  Future<void> fetchRocketImages() async {
-    final response = await http.get(
-      Uri.parse('https://api.spacexdata.com/v4/rockets'),
-    );
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      final List<String> selectedImages = [];
-
-      for (int i = 0; i < 4 && i < data.length; i++) {
-        List<dynamic> images = data[i]['flickr_images'];
-        if (images.isNotEmpty) {
-          selectedImages.add(images.first);
-        }
-      }
-
-      state = selectedImages;
-    } else {
-      throw Exception('Failed to load rocket images');
-    }
-  }
-}
-
-final rocketImagesProvider =
-    NotifierProvider<RocketImagesNotifier, List<String>>(
-      () => RocketImagesNotifier(),
-    );
-
 class CurrentIndexNotifier extends Notifier<int> {
   @override
   int build() => 0;
 
-  void setIndex(int index) {
-    state = index;
-  }
+  void setIndex(int newIndex) => state = newIndex;
 }
 
 final currentIndexProvider = NotifierProvider<CurrentIndexNotifier, int>(
-  () => CurrentIndexNotifier(),
+  CurrentIndexNotifier.new,
 );
+
+final rocketImagesProvider = FutureProvider<List<String>>((ref) async {
+  final response = await http.get(
+    Uri.parse('https://api.spacexdata.com/v4/rockets'),
+  );
+  if (response.statusCode == 200) {
+    final List<dynamic> data = jsonDecode(response.body);
+    final List<String> selectedImages = [];
+    for (int i = 0; i < 4 && i < data.length; i++) {
+      List<dynamic> images = data[i]['flickr_images'];
+      if (images.isNotEmpty) {
+        selectedImages.add(images.first);
+      }
+    }
+    return selectedImages;
+  } else {
+    throw Exception('Failed to load rocket images');
+  }
+});
 
 final launchesProvider = FutureProvider.family<List<Launch>, String>((
   ref,
@@ -80,15 +66,10 @@ final launchesProvider = FutureProvider.family<List<Launch>, String>((
   }
 });
 
-class CarouselExample extends ConsumerStatefulWidget {
+class CarouselExample extends ConsumerWidget {
   const CarouselExample({super.key});
 
-  @override
-  ConsumerState<CarouselExample> createState() => _CarouselExampleState();
-}
-
-class _CarouselExampleState extends ConsumerState<CarouselExample> {
-  final Map<int, String> siteMap = {
+  final Map<int, String> siteMap = const {
     0: "Kwajalein Atoll Omelek Island",
     1: "Cape Canaveral Air Force Station Space Launch Complex 40",
     2: "Kennedy Space Center Historic Launch Complex 39A",
@@ -96,18 +77,11 @@ class _CarouselExampleState extends ConsumerState<CarouselExample> {
   };
 
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(
-      () => ref.read(rocketImagesProvider.notifier).fetchRocketImages(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final rocketImages = ref.watch(rocketImagesProvider);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final rocketImagesAsync = ref.watch(rocketImagesProvider);
     final currentIndex = ref.watch(currentIndexProvider);
     final selectedSite = siteMap[currentIndex]!;
+    final launchesAsync = ref.watch(launchesProvider(selectedSite));
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -119,132 +93,188 @@ class _CarouselExampleState extends ConsumerState<CarouselExample> {
         backgroundColor: Colors.black,
       ),
       body: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          rocketImages.isEmpty
-              ? const Center(
-                  child: CircularProgressIndicator(color: Colors.green),
-                )
-              : CarouselSlider(
-                  items: rocketImages
-                      .map(
-                        (item) => Container(
-                          margin: const EdgeInsets.all(5),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            image: DecorationImage(
-                              image: NetworkImage(item),
-                              fit: BoxFit.cover,
-                            ),
-                          ),
+          rocketImagesAsync.when(
+            data: (rocketImages) => CarouselSlider(
+              items: rocketImages
+                  .map(
+                    (item) => Container(
+                      margin: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        image: DecorationImage(
+                          image: NetworkImage(item),
+                          fit: BoxFit.cover,
                         ),
-                      )
-                      .toList(),
-                  options: CarouselOptions(
-                    height: 194,
-                    autoPlay: false,
-                    aspectRatio: 16 / 8,
-                    viewportFraction: 0.78,
-                    enlargeCenterPage: true,
-                    enlargeStrategy: CenterPageEnlargeStrategy.height,
-                    onPageChanged: (index, reason) {
-                      ref.read(currentIndexProvider.notifier).setIndex(index);
-                    },
+                      ),
+                    ),
+                  )
+                  .toList(),
+              options: CarouselOptions(
+                height: 194,
+                autoPlay: false,
+                aspectRatio: 16 / 8,
+                viewportFraction: 0.78,
+                enlargeCenterPage: true,
+                enlargeStrategy: CenterPageEnlargeStrategy.height,
+                onPageChanged: (index, reason) {
+                  ref.read(currentIndexProvider.notifier).setIndex(index);
+                },
+              ),
+            ),
+            loading: () => const Center(
+              child: CircularProgressIndicator(color: Colors.green),
+            ),
+            error: (err, _) => Center(child: Text('Error: $err')),
+          ),
+          const SizedBox(height: 4),
+          rocketImagesAsync.when(
+            data: (rocketImages) => Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: rocketImages.asMap().entries.map((item) {
+                return Container(
+                  height: 10,
+                  width: 10,
+                  margin: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white),
+                    shape: BoxShape.circle,
+                    color: currentIndex == item.key
+                        ? Colors.white
+                        : Colors.black,
                   ),
-                ),
+                );
+              }).toList(),
+            ),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
           const SizedBox(height: 16),
           Expanded(
-            child: ref
-                .watch(launchesProvider(selectedSite))
-                .when(
-                  data: (launches) {
-                    if (launches.isEmpty) {
-                      return const Center(
-                        child: Text('No launches for this site.'),
-                      );
-                    }
-                    return ListView.builder(
-                      itemCount: launches.length,
-                      itemBuilder: (context, index) {
-                        final launch = launches[index];
-                        final formattedDate = DateFormat(
-                          'dd/MM/yyyy',
-                        ).format(launch.launchDate);
-                        final formattedTime = DateFormat(
-                          'h:mm a',
-                        ).format(launch.launchDate);
-                        return Card(
-                          color: const Color.fromRGBO(28, 28, 28, 1),
-                          margin: const EdgeInsets.symmetric(
-                            vertical: 4,
-                            horizontal: 4,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(7),
-                          ),
-                          elevation: 3,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Column(
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4),
+                    child: Text(
+                      'Missions',
+                      style: TextStyle(fontSize: 24, color: Colors.white),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: launchesAsync.when(
+                      data: (launches) {
+                        if (launches.isEmpty) {
+                          return const Center(
+                            child: Text(
+                              'No launches for this site.',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          );
+                        }
+                        return ListView.builder(
+                          itemCount: launches.length,
+                          itemBuilder: (context, index) {
+                            final launch = launches[index];
+                            final formattedDate = DateFormat(
+                              'dd/MM/yyyy',
+                            ).format(launch.launchDate);
+                            final formattedTime = DateFormat(
+                              'h:mm a',
+                            ).format(launch.launchDate);
+                            return Card(
+                              color: const Color.fromRGBO(28, 28, 28, 1),
+                              margin: const EdgeInsets.symmetric(
+                                vertical: 4,
+                                horizontal: 4,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                              elevation: 3,
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      formattedDate,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        color: Color.fromRGBO(186, 252, 84, 1),
-                                      ),
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          formattedDate,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            color: Color.fromRGBO(
+                                              186,
+                                              252,
+                                              84,
+                                              1,
+                                            ),
+                                          ),
+                                        ),
+                                        Text(
+                                          formattedTime,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            color: Color.fromRGBO(
+                                              197,
+                                              197,
+                                              197,
+                                              1,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    Text(
-                                      formattedTime,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        color: Color.fromRGBO(197, 197, 197, 1),
+                                    const SizedBox(width: 20),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            launch.missionName,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 20,
+                                            ),
+                                          ),
+                                          Text(
+                                            launch.launchSite,
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              color: Color.fromRGBO(
+                                                197,
+                                                197,
+                                                197,
+                                                1,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
-                                const SizedBox(width: 20),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        launch.missionName,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 20,
-                                        ),
-                                      ),
-                                      Text(
-                                        launch.launchSite,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          color: Color.fromRGBO(
-                                            197,
-                                            197,
-                                            197,
-                                            1,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                              ),
+                            );
+                          },
                         );
                       },
-                    );
-                  },
-                  loading: () => const Center(
-                    child: CircularProgressIndicator(color: Colors.green),
+                      loading: () => const Center(
+                        child: CircularProgressIndicator(color: Colors.green),
+                      ),
+                      error: (err, _) => Center(child: Text('Error: $err')),
+                    ),
                   ),
-                  error: (err, stack) => Center(child: Text('Error: $err')),
-                ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
